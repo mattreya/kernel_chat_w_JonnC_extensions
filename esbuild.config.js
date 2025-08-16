@@ -21,6 +21,7 @@ esbuild
     outfile: 'bundle/gemini.js',
     platform: 'node',
     format: 'esm',
+    external: ['@google/gemini-cli-rag'],
     define: {
       'process.env.CLI_VERSION': JSON.stringify(pkg.version),
     },

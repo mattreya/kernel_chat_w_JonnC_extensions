@@ -6,7 +6,8 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi, beforeEach, Mock } from 'vitest';
-import { renderHook, act, waitFor } from '@testing-library/react';
+import { renderHook, act } from '@testing-library/react';
+import { waitFor } from '@testing-library/dom';
 import { useGeminiStream, mergePartListUnions } from './useGeminiStream.js';
 import { useInput } from 'ink';
 import {
