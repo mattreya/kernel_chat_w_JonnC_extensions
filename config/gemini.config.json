@@ -1,0 +1,6 @@
+{
+  "embeddings": { "provider": "gemini", "model": "text-embedding-005" },
+  "store": { "provider": "chroma", "path": ".gemini/rag_store" },
+  "split": { "proseTokens": 1024, "overlapPct": 0.1 },
+  "retrieval": { "topk": 5, "threshold": 0.30, "mmrLambda": 0.5 }
+}

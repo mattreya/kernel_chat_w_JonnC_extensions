@@ -1,0 +1,63 @@
+# API keys and secrets
+.env
+.env~
+
+# gemini-cli settings
+.gemini/
+!gemini/config.yaml
+
+# Dependency directory
+node_modules
+bower_components
+
+# Editors
+.idea
+*.iml
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# TypeScript build info files
+*.tsbuildinfo
+
+# Ignore built ts files
+dist
+
+# Docker folder to help skip auth refreshes
+.docker
+
+bundle
+
+# Test report files
+junit.xml
+packages/*/coverage/
+
+# Generated files
+packages/cli/src/generated/
+.integration-tests/
+
+# Large directories to ignore for kernel_chat repo
+Ubuntu_Linux/
+LDD/
+linux-6.14.11/
+Linux_image/
+
+# Large files
+*.iso
+*.qcow2
+*.tar.gz
+spruh73q.pdf
+
+# Serial and hardware specific files
+serial-open.sb
+serial_console_probe.mjs
+test-serial.ts
+gpio_led_driver.c
+
+# Temporary and log files
+real_time_analysis.log
+yes
+yes.pub
+seed.iso
+debian-11-genericcloud-arm64.qcow2
