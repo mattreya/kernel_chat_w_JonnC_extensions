@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { spawn } from 'child_process';
+import { spawn, exec } from 'child_process';
 import { StringDecoder } from 'string_decoder';
 import type { HistoryItemWithoutId } from '../types.js';
 import { useCallback } from 'react';
@@ -35,6 +35,29 @@ interface ShellExecutionResult {
 }
 
 /**
+ * Executes a shell command on a remote machine via SSH.
+ * @param sshHost The SSH host (e.g., user@host)
+ * @param command The command to execute remotely
+ * @returns Promise resolving to stdout and stderr
+ */
+function runRemoteCommand(
+  sshHost: string,
+  command: string,
+): Promise<{ stdout: string; stderr: string; code: number | null }> {
+  // Compose a command that first changes to /tmp, lists files, prints pwd, then runs the user's command
+  const composedCommand = `cd /tmp && echo '[DEBUG] Listing files in /tmp:' && ls && echo '[DEBUG] Current directory:' && pwd && echo '[DEBUG] Running user command:' && (${command})`;
+  return new Promise((resolve, reject) => {
+    exec(`ssh ${sshHost} "${composedCommand.replace(/"/g, '\"')}"`, (error, stdout, stderr) => {
+      if (error) {
+        resolve({ stdout, stderr, code: error.code ?? 1 });
+      } else {
+        resolve({ stdout, stderr, code: 0 });
+      }
+    });
+  });
+}
+
+/**
  * Executes a shell command using `spawn`, capturing all output and lifecycle events.
  * This is the single, unified implementation for shell execution.
  *
@@ -51,7 +74,25 @@ function executeShellCommand(
   abortSignal: AbortSignal,
   onOutputChunk: (chunk: string) => void,
   onDebugMessage: (message: string) => void,
+  config?: Config
 ): Promise<ShellExecutionResult> {
+  // If remote SSH host is set in config, run command remotely
+  if (config && (config as any).remoteSshHost) {
+    const sshHost = (config as any).remoteSshHost;
+    onDebugMessage(`Running remotely via SSH: ${sshHost}`);
+    return runRemoteCommand(sshHost, commandToExecute).then(({ stdout, stderr, code }) => {
+      onOutputChunk(stdout + (stderr ? `\n${stderr}` : ''));
+      return {
+        rawOutput: Buffer.from(stdout + stderr),
+        output: stdout + (stderr ? `\n${stderr}` : ''),
+        exitCode: code,
+        signal: null,
+        error: null,
+        aborted: false,
+      };
+    });
+  }
+
   return new Promise((resolve) => {
     const isWindows = os.platform() === 'win32';
     const shell = isWindows ? 'cmd.exe' : 'bash';
@@ -259,6 +300,7 @@ export const useShellCommandProcessor = (
             }
           },
           onDebugMessage,
+          config
         )
           .then((result) => {
             // TODO(abhipatel12) - Consider updating pending item and using timeout to ensure

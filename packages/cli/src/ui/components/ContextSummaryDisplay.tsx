@@ -32,8 +32,8 @@ export const ContextSummaryDisplay: React.FC<ContextSummaryDisplayProps> = ({
     if (geminiMdFileCount === 0) {
       return '';
     }
-    const allNamesTheSame = new Set(contextFileNames).size < 2;
-    const name = allNamesTheSame ? contextFileNames[0] : 'context';
+    // Always display as "Kernelchat.md" regardless of actual filenames
+    const name = 'Kernelchat.md';
     return `${geminiMdFileCount} ${name} file${
       geminiMdFileCount > 1 ? 's' : ''
     }`;

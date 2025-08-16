@@ -65,6 +65,7 @@ export interface Settings {
   hideWindowTitle?: boolean;
 
   // Add other settings here.
+  remoteSshHost?: string;
 }
 
 export interface SettingsError {
@@ -188,6 +189,7 @@ export function loadSettings(workspaceDir: string): LoadedSettings {
         stripJsonComments(userContent),
       ) as Settings;
       userSettings = resolveEnvVarsInObject(parsedUserSettings);
+      console.debug('[DEBUG] Loaded user settings:', userSettings);
       // Support legacy theme names
       if (userSettings.theme && userSettings.theme === 'VS') {
         userSettings.theme = DefaultLight.name;
@@ -216,6 +218,7 @@ export function loadSettings(workspaceDir: string): LoadedSettings {
         stripJsonComments(projectContent),
       ) as Settings;
       workspaceSettings = resolveEnvVarsInObject(parsedWorkspaceSettings);
+      console.debug('[DEBUG] Loaded workspace settings:', workspaceSettings);
       if (workspaceSettings.theme && workspaceSettings.theme === 'VS') {
         workspaceSettings.theme = DefaultLight.name;
       } else if (
@@ -230,6 +233,15 @@ export function loadSettings(workspaceDir: string): LoadedSettings {
       message: getErrorMessage(error),
       path: workspaceSettingsPath,
     });
+  }
+
+  const mergedSettings = {
+    ...userSettings,
+    ...workspaceSettings,
+  };
+  console.debug('[DEBUG] Merged settings:', mergedSettings);
+  if (mergedSettings.remoteSshHost) {
+    console.debug('[DEBUG] remoteSshHost detected:', mergedSettings.remoteSshHost);
   }
 
   return new LoadedSettings(

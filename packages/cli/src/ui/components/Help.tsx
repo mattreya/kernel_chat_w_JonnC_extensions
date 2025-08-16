@@ -82,6 +82,9 @@ export const Help: React.FC<Help> = ({ commands }) => (
       </Text>
       - shell command
     </Text>
+    <Text color={Colors.Foreground}>
+      <Text bold color={Colors.AccentPurple}> {' '}~{' '} </Text> - ask the device in natural language (serial prompt)
+    </Text>
 
     <Box height={1} />
 

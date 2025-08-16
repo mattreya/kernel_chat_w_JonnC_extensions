@@ -23,6 +23,11 @@ import { WebFetchTool } from '../tools/web-fetch.js';
 import { ReadManyFilesTool } from '../tools/read-many-files.js';
 import { MemoryTool, setGeminiMdFilename } from '../tools/memoryTool.js';
 import { WebSearchTool } from '../tools/web-search.js';
+import { GetDeviceInfoTool } from '../tools/get-device-info.js';
+import { GetDriverInfoTool } from '../tools/get-driver-info.js';
+import { KernelHotspotsTool } from '../tools/kernel-hotspots.js';
+import { GetDeviceTreeTool } from '../tools/get-device-tree.js';
+import { RealTimeAnalysisTool } from '../tools/real-time-analysis.js';
 import { GeminiClient } from '../core/client.js';
 import { GEMINI_CONFIG_DIR as GEMINI_DIR } from '../tools/memoryTool.js';
 import { FileDiscoveryService } from '../services/fileDiscoveryService.js';
@@ -126,6 +131,7 @@ export interface ConfigParameters {
   bugCommand?: BugCommandSettings;
   model: string;
   extensionContextFilePaths?: string[];
+  remoteSshHost?: string;
 }
 
 export class Config {
@@ -166,6 +172,7 @@ export class Config {
   private readonly extensionContextFilePaths: string[];
   private modelSwitchedDuringSession: boolean = false;
   flashFallbackHandler?: FlashFallbackHandler;
+  private readonly remoteSshHost?: string;
 
   constructor(params: ConfigParameters) {
     this.sessionId = params.sessionId;
@@ -207,6 +214,7 @@ export class Config {
     this.bugCommand = params.bugCommand;
     this.model = params.model;
     this.extensionContextFilePaths = params.extensionContextFilePaths ?? [];
+    this.remoteSshHost = params.remoteSshHost;
 
     if (params.contextFileName) {
       setGeminiMdFilename(params.contextFileName);
@@ -487,6 +495,11 @@ export function createToolRegistry(config: Config): Promise<ToolRegistry> {
   registerCoreTool(ShellTool, config);
   registerCoreTool(MemoryTool);
   registerCoreTool(WebSearchTool, config);
+  registerCoreTool(GetDeviceInfoTool, config);
+  registerCoreTool(GetDriverInfoTool);
+  registerCoreTool(KernelHotspotsTool);
+  registerCoreTool(GetDeviceTreeTool);
+  registerCoreTool(RealTimeAnalysisTool);
   return (async () => {
     await registry.discoverTools();
     return registry;

@@ -1,0 +1,8 @@
+#cloud-config
+users:
+  - name: debian
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    lock_passwd: false
+    passwd: "$6$Iv7b8d0m$rG0../T5TCKZYq5Fg2sE0K63q6q3Ea8vBOPqAIUGWz3Wcj4MBGWJA9pzc76JEPD/JIktfI9xWs/5q3W7Zvg1j."
+ssh_pwauth: true
+chpasswd: { expire: false }

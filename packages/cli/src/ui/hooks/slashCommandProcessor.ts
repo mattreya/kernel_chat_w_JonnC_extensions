@@ -33,6 +33,14 @@ import { GIT_COMMIT_INFO } from '../../generated/git-commit.js';
 import { formatDuration, formatMemoryUsage } from '../utils/formatters.js';
 import { getCliVersion } from '../../utils/version.js';
 import { LoadedSettings } from '../../config/settings.js';
+import { SerialConsole } from '../../subsystems/serialConsole.js';
+import { Worker } from 'node:worker_threads';
+import { exec } from 'child_process';
+
+// Allow other modules (useGeminiStream) to query current serial log length
+export function getSerialLogLength(): number {
+  return recentLogs.length;
+}
 
 export interface SlashCommandActionReturn {
   shouldScheduleTool?: boolean;
@@ -54,6 +62,30 @@ export interface SlashCommand {
     | void
     | SlashCommandActionReturn
     | Promise<void | SlashCommandActionReturn>; // Action can now return this object
+}
+
+let serial: SerialConsole | null = null;
+let serialWorker: Worker | null = null;
+let summaryBuf: string[] = [];
+const SUMMARY_N_LINES = 50;
+let serialHintShown = false;
+// Ring buffer of recent lines for '/serial tail' command.
+const LOG_RING_SIZE = 2000; // increased to ~2K lines at user's request
+let recentLogs: string[] = [];
+// Expose the live log ring so other packages (e.g. core tools) can inspect it.
+(globalThis as any).GEMINI_SERIAL_LOGS = recentLogs;
+let lastCommandStartIdx = 0; // index of log array when last serial send occurred
+let partialSerialLine = ''; // accumulate chunk fragments until newline
+
+function showSerialHint(addMessage: (msg: Message) => void) {
+  if (!serialHintShown) {
+    addMessage({
+      type: MessageType.INFO,
+      content: 'ℹ️  Serial logs are streaming in the "Serial Console" window; this pane stays quiet unless an error occurs.',
+      timestamp: new Date(),
+    });
+    serialHintShown = true;
+  }
 }
 
 /**
@@ -193,6 +225,108 @@ export const useSlashCommandProcessor = (
 
   const slashCommands: SlashCommand[] = useMemo(() => {
     const commands: SlashCommand[] = [
+      // ---------------- RAG Docs commands ----------------
+      {
+        name: 'rag',
+        description: 'manage local documentation RAG store',
+        action: async (_main, subCommand, args) => {
+          const rag = await import('@google/gemini-cli-rag');
+          const { ingest } = rag;
+          const storeDir = path.join(config?.getProjectRoot() || process.cwd(), '.gemini', 'rag_store');
+          const manifestPath = path.join(storeDir, 'chunks.jsonl');
+
+          const ensureStoreExists = async () => {
+            try {
+              await fs.mkdir(storeDir, { recursive: true });
+            } catch {}
+          };
+
+          switch (subCommand) {
+            case 'add': {
+              if (!args) {
+                addMessage({ type: MessageType.ERROR, content: 'Usage: /rag add <file|dir> [--tag TAG[,TAG2]] [--watch]', timestamp: new Date() });
+                return;
+              }
+              // crude arg parse
+              const parts = args.split(/\s+/);
+              const paths: string[] = [];
+              const tags: string[] = [];
+              let watch = false;
+              for (let i = 0; i < parts.length; i++) {
+                const p = parts[i];
+                if (p === '--watch') watch = true;
+                else if (p === '--tag') {
+                  const tagStr = parts[i + 1] || '';
+                  i++;
+                  tags.push(...tagStr.split(',').map((t) => t.trim()).filter(Boolean));
+                } else {
+                  paths.push(p);
+                }
+              }
+              if (paths.length === 0) {
+                addMessage({ type: MessageType.ERROR, content: 'Specify at least one file or directory', timestamp: new Date() });
+                return;
+              }
+              addMessage({ type: MessageType.INFO, content: `Ingesting ${paths.join(', ')} ...`, timestamp: new Date() });
+              await ensureStoreExists();
+              try {
+                await ingest(paths, {
+                  tag: tags,
+                  watch,
+                  config: config!,
+                  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+                  // @ts-ignore
+                  progress: (msg: string) =>
+                    addMessage({ type: MessageType.INFO, content: msg, timestamp: new Date() }),
+                } as any);
+                addMessage({ type: MessageType.INFO, content: 'Ingestion complete.', timestamp: new Date() });
+              } catch (e) {
+                addMessage({ type: MessageType.ERROR, content: `Ingest failed: ${(e as Error).message}`, timestamp: new Date() });
+              }
+              return;
+            }
+            case 'list': {
+              await ensureStoreExists();
+              let count = 0;
+              let sources = new Set<string>();
+              try {
+                const data = await fs.readFile(manifestPath, 'utf8');
+                for (const line of data.split(/\n+/)) {
+                  if (!line.trim()) continue;
+                  count++;
+                  try {
+                    const obj = JSON.parse(line);
+                    if (obj?.metadata?.source) sources.add(obj.metadata.source);
+                  } catch {}
+                }
+              } catch {}
+              addMessage({ type: MessageType.INFO, content: `Docs store: ${count} chunks from ${sources.size} files`, timestamp: new Date() });
+              return;
+            }
+            case 'status': {
+              await ensureStoreExists();
+              let mtime = 'unknown';
+              try {
+                const stat = await fs.stat(manifestPath);
+                mtime = stat.mtime.toISOString();
+              } catch {}
+              addMessage({ type: MessageType.INFO, content: `RAG store path: ${storeDir}\nLast updated: ${mtime}`, timestamp: new Date() });
+              return;
+            }
+            case 'clear': {
+              try {
+                await fs.rm(storeDir, { recursive: true, force: true });
+                addMessage({ type: MessageType.INFO, content: 'RAG store cleared.', timestamp: new Date() });
+              } catch (e) {
+                addMessage({ type: MessageType.ERROR, content: `Failed to clear store: ${(e as Error).message}`, timestamp: new Date() });
+              }
+              return;
+            }
+            default:
+              addMessage({ type: MessageType.INFO, content: 'Usage: /rag <add|list|status|clear|rebuild>', timestamp: new Date() });
+          }
+        },
+      },
       {
         name: 'help',
         altName: '?',
@@ -882,6 +1016,319 @@ export const useSlashCommandProcessor = (
           }
           setPendingCompressionItem(null);
         },
+      },
+      {
+        name: 'serial',
+        description: 'Serial console: /serial connect <port> <baud>, /serial send <cmd>, /serial prompt <natural prompt>, /serial disconnect',
+        action: async (_mainCommand, subCommand, args) => {
+          if (subCommand === 'connect') {
+            serialHintShown = false;
+            const [port, baudStr] = (args || '').split(' ');
+            const baud = baudStr ? parseInt(baudStr, 10) : 115200;
+            if (serial) serial.disconnect();
+            if (serialWorker) {
+              try {
+                serialWorker.postMessage({ type: 'quit' });
+                await serialWorker.terminate();
+              } catch {
+                /* ignore */
+              }
+              serialWorker = null;
+            }
+            serial = new SerialConsole();
+            // Spawn PipeWriter worker that manages TerminalSpooler in a separate thread.
+            const workerUrl = new URL('../../subsystems/pipeWriter.js', import.meta.url);
+            // @ts-ignore Node typings may not yet include 'type' in WorkerOptions.
+            serialWorker = new Worker(workerUrl, {
+              workerData: { path: port, baudRate: baud, windowTitle: `Serial: ${port}@${baud}` },
+              type: 'module',
+            } as any);
+            serial.on('open', () => addMessage({ type: MessageType.INFO, content: `Serial connected to ${port} at ${baud} baud.`, timestamp: new Date() }));
+            serial.on('data', (data: string) => {
+              showSerialHint(addMessage);
+              serialWorker?.postMessage({ type: 'line', data });
+
+              // Robust line assembly: accumulate until newline.
+              partialSerialLine += data;
+              let newlineIdx: number;
+              while ((newlineIdx = partialSerialLine.search(/\r?\n/)) !== -1) {
+                const line = partialSerialLine.slice(0, newlineIdx).trimEnd();
+                partialSerialLine = partialSerialLine.slice(newlineIdx + (partialSerialLine[newlineIdx] === '\r' && partialSerialLine[newlineIdx + 1] === '\n' ? 2 : 1));
+                if (line.length > 0) {
+                  recentLogs.push(line);
+                  if (recentLogs.length > LOG_RING_SIZE) {
+                    const excess = recentLogs.length - LOG_RING_SIZE;
+                    // Remove oldest entries in-place to preserve the same array reference
+                    recentLogs.splice(0, excess);
+                    // Adjust saved index so it still refers to same logical point
+                    lastCommandStartIdx = Math.max(0, lastCommandStartIdx - excess);
+                  }
+                }
+              }
+              summaryBuf.push(data);
+              if (summaryBuf.length >= SUMMARY_N_LINES) {
+                const chunk = summaryBuf.join('\n');
+                summaryBuf.length = 0;
+                // TODO: summarizer
+              }
+            });
+            serial.on('error', (err: Error) => addMessage({ type: MessageType.ERROR, content: `Serial error: ${err.message}`, timestamp: new Date() }));
+            serial.on('close', () => addMessage({ type: MessageType.INFO, content: 'Serial disconnected.', timestamp: new Date() }));
+            serial.connect(port, baud);
+            // Save active serial port so other tools (e.g., get_device_info) can reuse it.
+            process.env.GEMINI_SERIAL_PORT = port;
+            // Expose serial object globally so core tools can reuse the existing session.
+            (globalThis as any).GEMINI_ACTIVE_SERIAL = serial;
+
+            const attachWorkerListeners = () => {
+              if (!serialWorker) return;
+              serialWorker.on('message', (msg: { type: string; message?: string }) => {
+                if (msg.type === 'error') {
+                  addMessage({ type: MessageType.ERROR, content: `Serial console worker error: ${msg.message}`, timestamp: new Date() });
+                } else if (msg.type === 'ready') {
+                  addMessage({ type: MessageType.INFO, content: 'Serial console window opened.', timestamp: new Date() });
+                }
+              });
+              serialWorker.on('error', (err: Error) => {
+                addMessage({ type: MessageType.ERROR, content: `Serial console worker failed: ${err.message}. Falling back to inline logs.`, timestamp: new Date() });
+                serialWorker = null;
+              });
+              serialWorker.on('exit', (code) => {
+                if (code !== 0) {
+                  addMessage({ type: MessageType.ERROR, content: `Serial console worker exited with code ${code}`, timestamp: new Date() });
+                }
+              });
+            };
+            attachWorkerListeners();
+          } else if (subCommand === 'tail') {
+            const n = args ? parseInt(args, 10) || 20 : 20;
+            const output = recentLogs.slice(-n).join('\n');
+            addMessage({ type: MessageType.INFO, content: `Last ${n} serial lines:\n\n${output}`, timestamp: new Date() });
+          } else if (subCommand === 'summarize') {
+            let startIdx = lastCommandStartIdx;
+            let summaryQuery = args?.trim() || 'a concise summary';
+            const firstWord = summaryQuery.split(/\s+/)[0];
+            if (/^\d+$/.test(firstWord)) {
+              startIdx = parseInt(firstWord, 10);
+              summaryQuery = summaryQuery.substring(firstWord.length).trim() || 'a concise summary';
+            }
+            if (startIdx < 0 || startIdx >= recentLogs.length) startIdx = 0;
+
+            const logsToSummarize = recentLogs.slice(startIdx).join('\n');
+            const linesCount = logsToSummarize.split(/\n/).length;
+
+            // Debug preview
+            const previewLines = logsToSummarize.split(/\n/).slice(0, 20).join('\n');
+            addMessage({
+              type: MessageType.INFO,
+              content: `Debug: summarizing from index ${startIdx}. Total lines=${linesCount}. Preview:\n\n${previewLines}`,
+              timestamp: new Date(),
+            });
+
+            addMessage({ type: MessageType.INFO, content: `Summarizing ${linesCount} captured lines ...`, timestamp: new Date() });
+
+            try {
+              const geminiClient = config?.getGeminiClient();
+              if (!geminiClient) throw new Error('Gemini client not available');
+
+              const prompt = `
+You are a strict log-analyser. 
+Answer the user’s query **only** with facts you can derive
+from the lines below. If the answer is not present, reply
+“Information not found in the provided output.”
+
+User query: ${summaryQuery}
+
+Log snippet:
+\`\`\`
+${logsToSummarize}
+\`\`\`
+`.trim();
+
+              const response = await geminiClient.generateContent(
+                [{ role: 'user', parts: [{ text: prompt }] }],
+                {},                       // optional generation config
+                new AbortController().signal
+              );
+              const summaryText = response.text || '(No summary returned)';
+
+              addMessage({ type: MessageType.INFO, content: summaryText, timestamp: new Date() });
+            } catch (err) {
+              addMessage({ type: MessageType.ERROR, content: `Failed to summarize logs: ${(err as Error).message}`, timestamp: new Date() });
+            }
+          } else if (subCommand === 'clear') {
+            recentLogs.length = 0; // maintain same array reference
+            addMessage({ type: MessageType.INFO, content: 'Serial log buffer cleared.', timestamp: new Date() });
+          } else if (subCommand === 'send' && serial) {
+            // mark start index before sending
+            lastCommandStartIdx = recentLogs.length;
+            if (args) {
+              serialWorker?.postMessage({ type: 'line', data: `> ${args}\n` });
+            }
+            serial.send(args || '');
+          } else if (subCommand === 'prompt' || subCommand === 'ask' || subCommand === 'query') {
+            // New feature: interpret natural-language prompt → shell command → serial → summary
+            if (!serial) {
+              addMessage({
+                type: MessageType.ERROR,
+                content: 'Serial not connected. Use /serial connect first.',
+                timestamp: new Date(),
+              });
+              return;
+            }
+            if (!args || args.trim().length === 0) {
+              addMessage({
+                type: MessageType.ERROR,
+                content: 'Usage: /serial prompt <natural language request>',
+                timestamp: new Date(),
+              });
+              return;
+            }
+
+            const nlPrompt = args.trim();
+            addMessage({
+              type: MessageType.INFO,
+              content: `Interpreting request: "${nlPrompt}"`,
+              timestamp: new Date(),
+            });
+
+            const geminiClient = config?.getGeminiClient();
+            let generatedCmd = '';
+            let cmdDescription = '';
+            try {
+              if (geminiClient) {
+                const schema = {
+                  type: 'object',
+                  properties: {
+                    command: {
+                      type: 'string',
+                      description: 'Shell command to execute that satisfies the request.',
+                    },
+                    description: {
+                      type: 'string',
+                      description: 'Brief one-sentence description of what the command does.',
+                    },
+                  },
+                  required: ['command'],
+                } as const;
+
+                const controller = new AbortController();
+                const jsonResp = (await geminiClient.generateJson(
+                  [
+                    {
+                      role: 'user',
+                      parts: [
+                        {
+                          text: [
+                            'You are an expert Linux shell assistant running on an embedded device.',
+                            'Translate the following natural language request into a **single** safe POSIX-compatible shell command.',
+                            'Return a JSON object that matches the given schema and do **not** include any extra keys or comments.',
+                            `Request: "${nlPrompt}"`,
+                          ].join('\n'),
+                        },
+                      ],
+                    },
+                  ],
+                  schema,
+                  controller.signal,
+                )) as unknown as { command: string; description?: string };
+
+                generatedCmd = (jsonResp.command || '').trim();
+                cmdDescription = (jsonResp.description || '').trim();
+              }
+            } catch (err) {
+              // Ignore model failures; fallback to heuristic.
+            }
+
+            // Simple heuristic fallbacks for common queries
+            if (!generatedCmd) {
+              const l = nlPrompt.toLowerCase();
+              if (l.includes('usb')) generatedCmd = 'lsusb';
+              else if (l.includes('cpu') && l.includes('usage'))
+                generatedCmd = 'top -bn1 | head -n 20';
+              else if (l.includes('disk') && (l.includes('space') || l.includes('usage')))
+                generatedCmd = 'df -h';
+              else if (l.includes('memory') && l.includes('usage'))
+                generatedCmd = 'free -h';
+              else if (l.includes('process') && l.includes('list'))
+                generatedCmd = 'ps aux';
+            }
+
+            if (!generatedCmd) {
+              addMessage({
+                type: MessageType.ERROR,
+                content: 'Failed to derive a shell command from the request.',
+                timestamp: new Date(),
+              });
+              return;
+            }
+
+            addMessage({
+              type: MessageType.INFO,
+              content: `Generated command: ${generatedCmd}${cmdDescription ? ` \u2014 ${cmdDescription}` : ''}`,
+              timestamp: new Date(),
+            });
+
+            // Send command via serial
+            lastCommandStartIdx = recentLogs.length;
+            serialWorker?.postMessage({ type: 'line', data: `> ${generatedCmd}\n` });
+            serial.send(generatedCmd);
+
+            // After a short delay, summarize the output for the user.
+            setTimeout(async () => {
+              try {
+                const logsToSummarize = recentLogs
+                  .slice(lastCommandStartIdx)
+                  .join('\n');
+                if (!logsToSummarize.trim()) return;
+
+                const summarizerPrompt = [
+                  'Provide a concise, user-friendly summary of the following command output.',
+                  'Focus on the key information the user asked for and avoid raw logs.',
+                  '\nOUTPUT:\n',
+                  logsToSummarize,
+                ].join('\n');
+
+                if (!geminiClient) return;
+                const response = await geminiClient.generateContent(
+                  [{ role: 'user', parts: [{ text: summarizerPrompt }] }],
+                  {},
+                  new AbortController().signal,
+                );
+                const summaryText = response.text || '(No summary returned)';
+                addMessage({
+                  type: MessageType.INFO,
+                  content: summaryText,
+                  timestamp: new Date(),
+                });
+              } catch (e) {
+                addMessage({
+                  type: MessageType.ERROR,
+                  content: `Failed to summarize output: ${(e as Error).message}`,
+                  timestamp: new Date(),
+                });
+              }
+            }, 800);
+          } else if (subCommand === 'disconnect') {
+            if (serial) serial.disconnect();
+            if (serialWorker) {
+              try {
+                serialWorker.postMessage({ type: 'quit' });
+                await serialWorker.terminate();
+              } catch {
+                /* ignore */
+              }
+              serialWorker = null;
+            }
+            // Clear saved serial port environment variable.
+            delete process.env.GEMINI_SERIAL_PORT;
+            delete (globalThis as any).GEMINI_ACTIVE_SERIAL;
+            serialHintShown = false;
+            addMessage({ type: MessageType.INFO, content: 'Serial disconnected; window closed', timestamp: new Date() });
+          } else {
+            addMessage({ type: MessageType.ERROR, content: 'Usage: /serial connect <port> <baud>, /serial send <cmd>, /serial disconnect', timestamp: new Date() });
+          }
+        }
       },
     ];
 

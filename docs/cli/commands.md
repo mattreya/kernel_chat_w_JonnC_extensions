@@ -130,3 +130,20 @@ The `!` prefix lets you interact with your system's shell directly from within G
       - When exited, the UI reverts to its standard appearance and normal Gemini CLI behavior resumes.
 
 - **Caution for all `!` usage:** Commands you execute in shell mode have the same permissions and impact as if you ran them directly in your terminal.
+
+## /serial
+
+### /serial connect <device> [baud]
+- Open a new OS terminal window, attach to device.
+- Device output appears live in the new window.
+- Main Gemini CLI prompt can send commands to serial.
+- Output is NOT shown in the main CLI pane.
+- Every N lines, a compact English summary may appear as `[Translated] ...` (future feature).
+
+### /serial disconnect
+- Close port and kill the window.
+
+### <anything else while connected>
+- Sent verbatim to serial (CR+LF appended).
+
+**Note:** Device output is streamed by a lightweight background worker so the main Gemini prompt stays responsive. Logs appear **only** in the external "Serial Console" window opened by `/serial connect`.

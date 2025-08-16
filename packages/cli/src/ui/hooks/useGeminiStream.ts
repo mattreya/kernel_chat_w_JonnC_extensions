@@ -37,6 +37,7 @@ import {
 import { isAtCommand } from '../utils/commandUtils.js';
 import { parseAndFormatApiError } from '../utils/errorParsing.js';
 import { useShellCommandProcessor } from './shellCommandProcessor.js';
+import { getSerialLogLength } from './slashCommandProcessor.js';
 import { handleAtCommand } from './atCommandProcessor.js';
 import { findLastSafeSplitPoint } from '../utils/markdownUtilities.js';
 import { useStateAndRef } from './useStateAndRef.js';
@@ -52,6 +53,9 @@ import {
   TrackedCancelledToolCall,
 } from './useReactToolScheduler.js';
 import { useSessionStats } from '../contexts/SessionContext.js';
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore – package provided in workspace but build path mapping not yet resolved in lint stage
+import { retrieve } from '@google/gemini-cli-rag';
 
 export function mergePartListUnions(list: PartListUnion[]): PartListUnion {
   const resultParts: PartListUnion = [];
@@ -206,6 +210,7 @@ export const useGeminiStream = (
     ): Promise<{
       queryToSend: PartListUnion | null;
       shouldProceed: boolean;
+      sourcesFooter?: string;
     }> => {
       if (turnCancelledRef.current) {
         return { queryToSend: null, shouldProceed: false };
@@ -225,27 +230,197 @@ export const useGeminiStream = (
         onDebugMessage(`User query: '${trimmedQuery}'`);
         await logger?.logMessage(MessageSenderType.USER, trimmedQuery);
 
-        // Handle UI-only commands first
-        const slashCommandResult = await handleSlashCommand(trimmedQuery);
-        if (typeof slashCommandResult === 'boolean' && slashCommandResult) {
-          // Command was handled, and it doesn't require a tool call from here
-          return { queryToSend: null, shouldProceed: false };
-        } else if (
-          typeof slashCommandResult === 'object' &&
-          slashCommandResult.shouldScheduleTool
-        ) {
-          // Slash command wants to schedule a tool call (e.g., /memory add)
-          const { toolName, toolArgs } = slashCommandResult;
-          if (toolName && toolArgs) {
-            const toolCallRequest: ToolCallRequestInfo = {
-              callId: `${toolName}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-              name: toolName,
-              args: toolArgs,
-              isClientInitiated: true,
-            };
-            scheduleToolCalls([toolCallRequest], abortSignal);
+        // ----- Docs RAG: /ask command -----
+        if (trimmedQuery.startsWith('/ask')) {
+          // Very lightweight option parser
+          const argString = trimmedQuery.slice(4).trim();
+          // Extract quoted question if present
+          let question = '';
+          let optsPart = '';
+          const quoteMatch = argString.match(/^(["'])([\s\S]+?)\1/);
+          if (quoteMatch) {
+            question = quoteMatch[2].trim();
+            optsPart = argString.slice(quoteMatch[0].length).trim();
+          } else {
+            // until first --option or end
+            const splitIdx = argString.search(/--/);
+            if (splitIdx >= 0) {
+              question = argString.slice(0, splitIdx).trim();
+              optsPart = argString.slice(splitIdx).trim();
+            } else {
+              question = argString.trim();
+              optsPart = '';
+            }
           }
-          return { queryToSend: null, shouldProceed: false }; // Handled by scheduling the tool
+
+          // defaults
+          let topk = 5;
+          let tagFilter: string | undefined;
+          let mode = 'answer';
+
+          const optionRegex = /--(\w+)(?:\s+([^\s]+))?/g;
+          let m: RegExpExecArray | null;
+          while ((m = optionRegex.exec(optsPart)) !== null) {
+            const key = m[1];
+            const val = m[2];
+            if (key === 'topk' && val) topk = parseInt(val, 10) || 5;
+            else if (key === 'tag' && val) tagFilter = val;
+            else if (key === 'mode' && val) mode = val;
+          }
+
+          if (!question) {
+            addItem(
+              {
+                type: MessageType.ERROR,
+                text: 'Usage: /ask "<question>" [--topk N] [--tag TAG] [--mode answer|snippets]',
+              },
+              userMessageTimestamp,
+            );
+            return { queryToSend: null, shouldProceed: false };
+          }
+
+          // retrieve docs
+          let hits;
+          try {
+            hits = await retrieve(question, {
+              topk,
+              tag: tagFilter,
+              config,
+            });
+          } catch (err) {
+            addItem(
+              {
+                type: MessageType.ERROR,
+                text: `Retrieval failed: ${err instanceof Error && err.message ? err.message : String(err)}`,
+              },
+              userMessageTimestamp,
+            );
+            return { queryToSend: null, shouldProceed: false };
+          }
+
+          if (mode === 'snippets') {
+            if (hits.length === 0) {
+              addItem(
+                {
+                  type: MessageType.INFO,
+                  text: `Snippets (top-${topk}, tag=${tagFilter ?? 'none'}): none`,
+                },
+                userMessageTimestamp,
+              );
+              return { queryToSend: null, shouldProceed: false };
+            }
+            const snippetLines = hits
+              .map((h: any, i: number) => {
+                const metaTags = h.metadata.tag?.join(',') || '-';
+                return (
+                  `[${i + 1}] source=${h.metadata.source}${h.metadata.page ? ' page=' + h.metadata.page : ''} tags=${metaTags}\n----\n${h.pageContent}\n----`
+                );
+              })
+              .join('\n');
+            addItem(
+              {
+                type: MessageType.INFO,
+                text: `Snippets (top-${topk}, tag=${tagFilter ?? 'none'}):\n${snippetLines}`,
+              },
+              userMessageTimestamp,
+            );
+            return { queryToSend: null, shouldProceed: false };
+          }
+
+          // Build answer-mode prompt
+          const citationsBlock = hits
+            .map(
+              (h: any, i: number) =>
+                `[${i + 1}] (${h.metadata.source}${
+                  h.metadata.page ? ':' + h.metadata.page : ''
+                })\n${h.pageContent}`,
+            )
+            .join('\n\n');
+
+          const sourcesFooter =
+            'Sources:\n' +
+            hits
+              .map(
+                (h: any, i: number) =>
+                  `[${i + 1}] ${h.metadata.source}${h.metadata.page ? ':' + h.metadata.page : ''}` +
+                  (h.metadata.path ? ` — ${h.metadata.path}` : ''),
+              )
+              .join('\n');
+
+          const prompt = `SYSTEM:\nYou are an ARM/Linux engineer. Answer ONLY from the \\"Relevant documentation\\" below. If unsure, say \"I don't know based on your docs.\" Cite facts with bracketed indices like [n].\n\nRelevant documentation:\n${citationsBlock}\n\nUSER: ${question}`.trim();
+
+          // Record user question in history (for display)
+          addItem({ type: MessageType.USER, text: question }, userMessageTimestamp);
+
+          return { queryToSend: prompt, shouldProceed: true, sourcesFooter };
+        }
+
+        // Handle natural-language serial prompt with '~' prefix
+        if (trimmedQuery.startsWith('~')) {
+          const promptText = trimmedQuery.slice(1).trim();
+          if (promptText.length > 0) {
+            await handleSlashCommand(`/serial prompt ${promptText}`);
+          }
+          return { queryToSend: null, shouldProceed: false };
+        }
+
+        // Handle custom serial prefixes: '>' and '>>> summarize'
+        if (trimmedQuery.startsWith('>')) {
+          const body = trimmedQuery.slice(1).trim();
+
+          // Only summarization without command: >>> ...
+          if (body.startsWith('>>>')) {
+            const queryPart = body.slice(3).trim();
+            await handleSlashCommand(`/serial summarize 0 ${queryPart}`);
+            return { queryToSend: null, shouldProceed: false };
+          }
+
+          // Look for first occurrence of '>>>' to split command / query.
+          const triplePos = body.indexOf('>>>');
+          let serialCmd = body;
+          let summaryQuery = '';
+          if (triplePos >= 0) {
+            serialCmd = body.slice(0, triplePos).trim();
+            summaryQuery = body.slice(triplePos + 3).trim();
+          }
+
+          // Send command if present
+          if (serialCmd.length > 0) {
+            await handleSlashCommand(`/serial send ${serialCmd}`);
+          }
+
+          if (summaryQuery.length > 0) {
+            setTimeout(() => {
+              handleSlashCommand(`/serial summarize ${summaryQuery}`);
+            }, 800);
+          }
+
+          return { queryToSend: null, shouldProceed: false };
+        }
+
+        // Handle other slash commands first (skip '/ask' itself which is handled here)
+        if (!trimmedQuery.startsWith('/ask')) {
+          const slashCommandResult = await handleSlashCommand(trimmedQuery);
+          if (typeof slashCommandResult === 'boolean' && slashCommandResult) {
+            // Command was handled, and it doesn't require a tool call from here
+            return { queryToSend: null, shouldProceed: false };
+          } else if (
+            typeof slashCommandResult === 'object' &&
+            slashCommandResult.shouldScheduleTool
+          ) {
+            // Slash command wants to schedule a tool call (e.g., /memory add)
+            const { toolName, toolArgs } = slashCommandResult;
+            if (toolName && toolArgs) {
+              const toolCallRequest: ToolCallRequestInfo = {
+                callId: `${toolName}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+                name: toolName,
+                args: toolArgs,
+                isClientInitiated: true,
+              };
+              scheduleToolCalls([toolCallRequest], abortSignal);
+            }
+            return { queryToSend: null, shouldProceed: false }; // Handled by scheduling the tool
+          }
         }
 
         if (shellModeActive && handleShellCommand(trimmedQuery, abortSignal)) {
@@ -506,7 +681,7 @@ export const useGeminiStream = (
       const abortSignal = abortControllerRef.current.signal;
       turnCancelledRef.current = false;
 
-      const { queryToSend, shouldProceed } = await prepareQueryForGemini(
+      const { queryToSend, shouldProceed, sourcesFooter } = await prepareQueryForGemini(
         query,
         userMessageTimestamp,
         abortSignal,
@@ -538,6 +713,11 @@ export const useGeminiStream = (
         if (pendingHistoryItemRef.current) {
           addItem(pendingHistoryItemRef.current, userMessageTimestamp);
           setPendingHistoryItem(null);
+        }
+
+        // If we have a sources footer from /ask answer mode, append it now.
+        if (sourcesFooter) {
+          addItem({ type: MessageType.GEMINI, text: sourcesFooter }, Date.now());
         }
       } catch (error: unknown) {
         if (error instanceof UnauthorizedError) {
