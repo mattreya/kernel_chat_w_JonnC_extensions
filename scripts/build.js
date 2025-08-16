@@ -30,9 +30,14 @@ if (!existsSync(join(root, 'node_modules'))) {
   execSync('npm install', { stdio: 'inherit', cwd: root });
 }
 
-// build all workspaces/packages
+// build all workspaces/packages in dependency order
 execSync('npm run generate', { stdio: 'inherit', cwd: root });
-execSync('npm run build --workspaces', { stdio: 'inherit', cwd: root });
+// Build RAG package first (required by CLI)
+execSync('npm run build --workspace packages/rag', { stdio: 'inherit', cwd: root });
+// Build core package next
+execSync('npm run build --workspace packages/core', { stdio: 'inherit', cwd: root });
+// Build CLI package last (depends on RAG and core)
+execSync('npm run build --workspace packages/cli', { stdio: 'inherit', cwd: root });
 
 // also build container image if sandboxing is enabled
 // skip (-s) npm install + build since we did that above
