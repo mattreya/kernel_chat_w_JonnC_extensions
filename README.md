@@ -1,9 +1,7 @@
-# 🐧 Kernel Chat: AI-Powered Embedded Linux Development Assistant
-#### Last Updated: 15.08.2025 ✅
+# Kernel Chat: AI-Powered Embedded Linux Development Assistant
+#### Last Updated: 17.08.2025 ✅
 
 **Kernel Chat** is an advanced **AI-powered CLI tool** forked from **Google's Gemini-CLI**, specifically enhanced for **embedded Linux developers** and **kernel engineers**. It combines the power of Google's Gemini AI with specialized tools for embedded systems development, serial console debugging, intelligent code generation, and comprehensive documentation analysis.
-
-⚠️ **Developer Tool Notice**: This is a  development tool designed for embedded engineers and kernel developers. While functional, it's under active development with new features being added. Use it with caution in development environments.
 
 ![Kernel Chat Demo]()
 
@@ -32,12 +30,12 @@ Ask natural language questions and get expert-level responses with automatic cod
 - *"What's causing high interrupt latency in my real-time application?"*
 - *"Show me the power management configuration for AM335x"*
 
-**Built-in Code Generation Capabilities:**
+**Built-in Code Generation Capabilities from Gemini CLI:**
 - **Driver code generation**: Create complete Linux kernel drivers from specifications
 - **Device tree overlays**: Generate DT overlays for custom hardware configurations  
 - **Kernel module templates**: Scaffold new kernel modules with proper structure
 - **Configuration files**: Generate kernel configs, Makefiles, and build scripts
-- **Test code**: Create unit tests and integration tests for kernel components
+
 
 ### 📚 **Advanced Documentation RAG (Retrieval-Augmented Generation)**
 - **Ingest technical documentation**: PDFs, datasheets, kernel docs, markdown files
@@ -71,6 +69,9 @@ cd kernel-chat
 # Install dependencies
 npm install
 
+#Build
+npm run build
+
 # Start Kernel Chat
 npm start
 ```
@@ -95,13 +96,39 @@ npm start
 /serial connect /dev/ttyUSB0 115200
 
 # Send commands naturally
-/serial send "cat /proc/cpuinfo"
+'~' Natural Language Commands:
+What it does: Converts your plain English questions into appropriate Linux commands
+AI Processing: generates commands, sends them to your device, and provides summaries
+Best for: Quick diagnostics, system analysis, and getting insights without knowing exact commands
 
-# Ask AI to interpret and execute
-/serial prompt "show me memory usage and running processes"
+Examples:
+   ~ Check the dmesg and summarize
+   ~ What processes are consuming the most memory?
+   ~ Show me network interface status
 
-# Get AI summary of recent logs
-/serial summarize "analyze the boot sequence"
+# > Direct Shell Commands
+What it does: Sends commands directly to your connected device
+Raw Output: Shows exact command output without AI interpretation
+Best for: Specific commands, debugging, and when you need  control
+
+Examples:
+   > uptime
+   > free -h
+   > lsusb
+   > journalctl -f
+
+# >>> Analysis & Summaries
+What it does: Analyzes recent output captured from your device without sending new commands
+AI Analysis: Reviews logs and data already collected
+Best for: Understanding what happened, pattern analysis, and getting context about previous output
+
+Combined Usage: > command >>> analysis
+
+Examples:
+   > dmesg >>> summarize for errors
+   > ps aux >>> which processes are using too much memory?
+   > lsusb >>> are all USB devices working properly?
+   > cat /var/log/syslog >>> what happened in the last boot?
 ```
 
 ### Device Analysis
@@ -237,7 +264,6 @@ The AI assistant understands relationships between:
 - **Development environment only**: Not intended for production systems
 - **Serial access**: Tool executes commands directly on connected devices
 - **Network isolation**: Use in controlled, isolated networks
-- **Credential management**: Store API keys securely
 - **Audit trail**: All commands and responses are logged
 
 ---
@@ -261,6 +287,8 @@ The AI assistant understands relationships between:
 
 ---
 
+⚠️ **Developer Tool Notice**: This is a  development tool designed for embedded engineers and kernel developers. While functional, it's under active development with new features being added. Use it with caution in development environments.
+
 ## 🤝 **Contributing**
 
 We welcome contributions from the embedded Linux community!
@@ -275,7 +303,6 @@ We welcome contributions from the embedded Linux community!
 - **New embedded platform support**
 - **Additional debugging tools**
 - **Documentation improvements**
-- **Test coverage expansion**
 - **Performance optimizations**
 
 ---
@@ -311,8 +338,8 @@ This project is licensed under the **Apache License 2.0** - see the [LICENSE](LI
 - **📖 Full Documentation**: [docs/](docs/)
 - **🐛 Bug Reports**: [GitHub Issues](https://github.com/your-username/kernel-chat/issues)
 - **💬 Discussions**: [GitHub Discussions](https://github.com/your-username/kernel-chat/discussions)
-- **📧 Contact**: For commercial support and consulting
 
 ---
 
-### ⭐ **Star this project** if it helps your embedded development workflow!
+## ⭐ Support the Project
+If you find this project useful, consider starring it on GitHub to help others discover it!
