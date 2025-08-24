@@ -347,7 +347,7 @@ export const useGeminiStream = (
               )
               .join('\n');
 
-          const prompt = `SYSTEM:\nYou are an ARM/Linux engineer. Answer ONLY from the \\"Relevant documentation\\" below. If unsure, say \"I don't know based on your docs.\" Cite facts with bracketed indices like [n].\n\nRelevant documentation:\n${citationsBlock}\n\nUSER: ${question}`.trim();
+          const prompt = `SYSTEM:\nYou are an ARM/Linux engineer with expertise in embedded systems and kernel development. Use the provided documentation as your primary reference, but you can also apply your general knowledge to provide comprehensive answers and generate code examples when requested. Always cite facts from the documentation with bracketed indices like [n]. When generating code, explain how it relates to the documented registers and hardware specifications.\n\nRelevant documentation:\n${citationsBlock}\n\nUSER: ${question}`.trim();
 
           // Record user question in history (for display)
           addItem({ type: MessageType.USER, text: question }, userMessageTimestamp);
