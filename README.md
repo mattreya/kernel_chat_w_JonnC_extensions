@@ -10,7 +10,7 @@ See the kernel chat-CLI in action below!
 
 ### 🎥 [Demo Video](https://youtu.be/2kZJUMfhygE)
 
-[![Demo Video](https://youtu.be/2kZJUMfhygE/sddefault.jpg)](https://youtu.be/2kZJUMfhygE)
+[![Demo Video](https://img.youtube.com/vi/2kZJUMfhygE/maxresdefault.jpg)](https://youtu.be/2kZJUMfhygE)
 
 ---
 
