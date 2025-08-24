@@ -5,6 +5,13 @@
 
 ![Kernel Chat Demo]()
 
+
+See the kernel chat-CLI in action below!
+
+### 🎥 [Demo Video](https://youtu.be/2kZJUMfhygE)
+
+[![Demo Video](https://youtu.be/2kZJUMfhygE/sddefault.jpg)](https://youtu.be/2kZJUMfhygE)
+
 ---
 
 ## 🚀 **Key Features**
