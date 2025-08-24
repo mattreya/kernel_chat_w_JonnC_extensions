@@ -3,10 +3,10 @@
 
 **Kernel Chat** is an advanced **AI-powered CLI tool** forked from **Google's Gemini-CLI**, specifically enhanced for **embedded Linux developers** and **kernel engineers**. It combines the power of Google's Gemini AI with specialized tools for embedded systems development, serial console debugging, intelligent code generation, and comprehensive documentation analysis.
 
-![Kernel Chat Demo]()
-
 
 See the kernel chat-CLI in action below!
+
+
 
 ### 🎥 [Demo Video](https://youtu.be/2kZJUMfhygE)
 
